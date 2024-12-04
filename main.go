@@ -109,8 +109,31 @@ func main() {
 		sub := subscriptions[i]
 		if strings.Contains(sub.Path, steamPath) && strings.Contains(sub.Path, bo3WorkshopContentRelativePath) {
 			fmt.Printf("\t...Deleting %s\n", sub.Details.Title)
-			err = os.RemoveAll(sub.Path)
+
+			// First walk the directory from deepest to shallowest
+			var paths []string
+			err = filepath.Walk(sub.Path, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if info.Mode()&os.ModeSymlink != 0 {
+					fmt.Printf("\tSkipping symlink: %s\n", path)
+					return nil // Just skip this file, not the whole directory
+				}
+				paths = append(paths, path)
+				return nil
+			})
 			check(err)
+
+			// Reverse the paths to delete from deepest to shallowest
+			for i := len(paths) - 1; i >= 0; i-- {
+				path := paths[i]
+				err = os.Remove(path)
+				if err != nil {
+					fmt.Printf("\tCould not remove %s: %v\n", path, err)
+					continue
+				}
+			}
 		} else {
 			fmt.Printf("\tNot deleting %s because checks failed.\n", sub.Path)
 		}
@@ -171,6 +194,12 @@ func getAllSubscriptionDetails(subscriptionPaths []string) ([]Subscription, erro
 func getDirSize(dirPath string) (int64, error) {
 	var size int64
 	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return filepath.SkipDir
+		}
 		size += info.Size()
 		return nil
 	})
