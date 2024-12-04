@@ -3,9 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -17,20 +17,34 @@ func check(err error) {
 
 type SubscriptionDetails struct {
 	Description string
-	FolderName string
+	FolderName  string
 	PublisherID string
-	Tags string
-	Thumbnail string
-	Title string
-	Type string
+	Tags        string
+	Thumbnail   string
+	Title       string
+	Type        string
+	Size        int64
 }
 
 type Subscription struct {
-	Path string
+	Path    string
 	Details SubscriptionDetails
 }
 
 const bo3WorkshopContentRelativePath = "\\steamapps\\workshop\\content\\311210"
+
+func formatSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -56,9 +70,12 @@ func main() {
 	}
 
 	fmt.Printf("\nSubscriptions:\n")
+	var totalSize int64
 	for i, sub := range subscriptions {
-		fmt.Printf("\t%d: %s\n", i, sub.Details.Title)
+		fmt.Printf("\t%d: %s (%s) [%s]\n", i, sub.Details.Title, sub.Details.Type, formatSize(sub.Details.Size))
+		totalSize += sub.Details.Size
 	}
+	fmt.Printf("\nSpace used: %s\n", formatSize(totalSize))
 
 	fmt.Print("\nDelete which? ")
 	subscriptionsToRemove, err := ReadInputNumbers()
@@ -69,13 +86,16 @@ func main() {
 	}
 
 	fmt.Printf("\nSelected Subscriptions:\n")
+	var spaceToReclaim int64
 	for _, i := range subscriptionsToRemove {
 		if i >= len(subscriptions) {
 			panic(fmt.Sprintf("input out of bounds: %d", i))
 		}
 		sub := subscriptions[i]
+		spaceToReclaim += sub.Details.Size
 		fmt.Printf("\t%d: %s (%s)\n", i, sub.Details.Title, sub.Path)
 	}
+	fmt.Printf("\nThis will reclaim %s\n", formatSize(spaceToReclaim))
 
 	fmt.Printf("\nDelete (y/n)? ")
 	yes, err := ReadInputYesNo()
@@ -111,7 +131,7 @@ func getWorkshopSubscriptions(workshopDirectory string) ([]string, error) {
 }
 
 func getSubscriptionDetails(workshopJsonPath string) (details SubscriptionDetails, err error) {
-	data, err := ioutil.ReadFile(workshopJsonPath)
+	data, err := os.ReadFile(workshopJsonPath)
 	if err != nil {
 		return details, err
 	}
@@ -129,11 +149,30 @@ func getAllSubscriptionDetails(subscriptionPaths []string) ([]Subscription, erro
 			return nil, err
 		}
 
+		dirSize, err := getDirSize(filepath.Dir(filePath))
+		if err != nil {
+			return nil, err
+		}
+		details.Size = dirSize
+
 		subscriptions = append(subscriptions, Subscription{
-			Path: filepath.Dir(filePath),
+			Path:    filepath.Dir(filePath),
 			Details: details,
+		})
+
+		sort.Slice(subscriptions, func(i, j int) bool {
+			return subscriptions[i].Details.Size > subscriptions[j].Details.Size
 		})
 	}
 
 	return subscriptions, nil
+}
+
+func getDirSize(dirPath string) (int64, error) {
+	var size int64
+	err := filepath.Walk(dirPath, func(path string, info os.FileInfo, err error) error {
+		size += info.Size()
+		return nil
+	})
+	return size, err
 }
